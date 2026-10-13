@@ -4,7 +4,7 @@
   ------------------------------------------------------------
   同じ階層に置くファイル：
     index.html
-    targets.mind        ← marker.png（もものきの丸い絵）から生成
+    targets.mind        ← 2ターゲット：[0] 絵の原画（円の部分だけ）[1] バルーン実物の写真
     img/artwork.png     飛び出すキャラ
     img/tree1〜3.png    周りに生える木（forest_gen.py で生成）
     img/bush.png        手前の茂み
@@ -87,6 +87,47 @@
         },
       });
 
+      // 演出の土台。MindAR のターゲットは見失った瞬間に消えるので、土台を別に置いて
+      // 最後に見えた位置を hold ms 保持する。揺れるバルーンで出たり消えたりするのを防ぐ
+      AFRAME.registerComponent("ar-anchor", {
+        schema: {
+          targets: { type: "selectorAll" },
+          scales: { type: "array", default: ["1"] },
+          hold: { default: 1000 },
+        },
+        init() {
+          const o = this.el.object3D;
+          o.matrixAutoUpdate = false;
+          o.visible = false;
+          this.shown = false;
+          this.lastSeen = 0;
+          this.scaleM = new THREE.Matrix4();
+        },
+        tick(t) {
+          const o = this.el.object3D;
+          const targets = this.data.targets || [];
+          let seen = -1;
+          for (let i = 0; i < targets.length; i++) {
+            if (targets[i].object3D.visible) { seen = i; break; }
+          }
+          if (seen >= 0) {
+            const s = parseFloat(this.data.scales[seen] || this.data.scales[0]);
+            o.matrix.copy(targets[seen].object3D.matrix).multiply(this.scaleM.makeScale(s, s, s));
+            o.matrixWorldNeedsUpdate = true;
+            this.lastSeen = t;
+            if (!this.shown) {
+              this.shown = true;
+              o.visible = true;
+              this.el.emit("anchorfound");
+            }
+          } else if (this.shown && t - this.lastSeen > this.data.hold) {
+            this.shown = false;
+            o.visible = false;
+            this.el.emit("anchorlost");
+          }
+        },
+      });
+
       // 舞い落ちる葉。active の間だけ上から降ってきて、下まで来たら上に戻る
       AFRAME.registerComponent("falling-leaf", {
         schema: { active: { default: false } },
@@ -124,10 +165,10 @@
   </head>
 
   <body>
-    <div id="hint">もものきの絵にカメラを向けてください</div>
+    <div id="hint">バルーンの絵にカメラを向けてください</div>
 
     <a-scene
-      mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 8"
+      mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.01; missTolerance: 8; warmupTolerance: 3"
       color-space="sRGB"
       renderer="colorManagement: true, physicallyCorrectLights, alpha: true"
       embedded
@@ -145,7 +186,14 @@
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-      <a-entity id="target" mindar-image-target="targetIndex: 0">
+      <!-- マーカー：0 = 絵の原画、1 = バルーンの実物写真。どちらに合っても同じ演出が出る -->
+      <a-entity id="target0" mindar-image-target="targetIndex: 0"></a-entity>
+      <a-entity id="target1" mindar-image-target="targetIndex: 1"></a-entity>
+
+      <!-- 演出一式。見えているマーカーの位置に毎フレーム合わせ、見失っても hold ms は残す。
+           scales はマーカー幅(=1)に対する演出の大きさ。絵の直径を基準にしていて、
+           バルーン写真は絵が切り抜きいっぱいに写っている分だけ大きくしてある -->
+      <a-entity id="anchor" ar-anchor="targets: #target0, #target1; scales: 0.69, 0.78; hold: 1000">
 
         <!-- 森：木・茂み・葉は下のスクリプトで生成して #forest に入れる -->
         <a-entity id="forest"></a-entity>
@@ -252,7 +300,7 @@
       }
 
       // ---- マーカー検出 --------------------------------------------
-      const target  = document.querySelector("#target");
+      const target  = document.querySelector("#anchor");
       const artwork = document.querySelector("#artwork");
       const shadow  = document.querySelector("#shadow");
       const hint    = document.querySelector("#hint");
@@ -261,7 +309,7 @@
                     "dir: alternate; loop: true; easing: easeInOutSine; startEvents: float";
       let floatTimer = null;
 
-      target.addEventListener("targetFound", () => {
+      target.addEventListener("anchorfound", () => {
         hint.classList.add("hidden");
         artwork.emit("pop");
         shadow.emit("pop");
@@ -271,7 +319,7 @@
         floatTimer = setTimeout(() => artwork.emit("float"), 780);
       });
 
-      target.addEventListener("targetLost", () => {
+      target.addEventListener("anchorlost", () => {
         hint.classList.remove("hidden");
         clearTimeout(floatTimer);
         artwork.removeAttribute("animation__float");
