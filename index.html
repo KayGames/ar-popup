@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!--
+  WebAR ポップアップ
+  ------------------------------------------------------------
+  同じ階層に置くファイル：
+    index.html（元 ar-popup.html）
+    targets.mind
+    img/artwork.png
+
+  マーカーは marker.png を印刷して使う（画面表示でも動く）。
+  HTTPSのサーバーが必要。file:// では動かない。
+  ------------------------------------------------------------
+-->
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>AR ポップアップ</title>
+
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+      }
+      #hint {
+        position: fixed;
+        left: 50%;
+        bottom: 7vh;
+        transform: translateX(-50%);
+        z-index: 10;
+        padding: 0.7em 1.4em;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(6px);
+        color: #fff;
+        font-size: 15px;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        transition: opacity 0.4s ease;
+      }
+      #hint.hidden { opacity: 0; }
+      @media (prefers-reduced-motion: reduce) {
+        #hint { transition: none; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="hint">マーカーにカメラを向けてください</div>
+
+    <a-scene
+      mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 8"
+      color-space="sRGB"
+      renderer="colorManagement: true, physicallyCorrectLights, alpha: true"
+      embedded
+      vr-mode-ui="enabled: false"
+      device-orientation-permission-ui="enabled: false"
+    >
+      <a-assets>
+        <img id="art" src="./img/artwork.png" crossorigin="anonymous" />
+      </a-assets>
+
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+      <a-entity id="target" mindar-image-target="targetIndex: 0">
+
+        <!-- 影：マーカー面に貼りつく楕円。浮遊感の担当 -->
+        <a-circle
+          id="shadow"
+          radius="0.2"
+          position="0 -0.2 0.002"
+          scale="1.25 0.38 1"
+          material="color: #000; shader: flat; opacity: 0; transparent: true"
+          animation__in="property: material.opacity; from: 0; to: 0.3; dur: 600; easing: easeOutCubic; startEvents: pop"
+          animation__out="property: material.opacity; to: 0; dur: 200; startEvents: drop"
+        ></a-circle>
+
+        <!-- 本体：印刷されたキャラと同じ大きさから浮き上がって拡大する -->
+        <a-plane
+          id="artwork"
+          width="0.36"
+          height="0.47"
+          position="0 0 0.003"
+          rotation="0 0 0"
+          scale="1 1 1"
+          material="src: #art; shader: flat; transparent: true; alphaTest: 0.02; side: double"
+          animation__pop="property: position; to: 0 0.16 0.5; dur: 750; easing: easeOutBack; startEvents: pop"
+          animation__grow="property: scale; to: 1.45 1.45 1; dur: 750; easing: easeOutBack; startEvents: pop"
+          animation__tilt="property: rotation; to: -12 0 0; dur: 750; easing: easeOutBack; startEvents: pop"
+          animation__float="property: position; to: 0 0.22 0.5; dur: 2200; dir: alternate; loop: true; easing: easeInOutSine; startEvents: float"
+          animation__drop="property: position; to: 0 0 0.003; dur: 250; startEvents: drop"
+          animation__shrink="property: scale; to: 1 1 1; dur: 250; startEvents: drop"
+          animation__untilt="property: rotation; to: 0 0 0; dur: 250; startEvents: drop"
+        ></a-plane>
+
+      </a-entity>
+    </a-scene>
+
+    <script>
+      const target  = document.querySelector("#target");
+      const artwork = document.querySelector("#artwork");
+      const shadow  = document.querySelector("#shadow");
+      const hint    = document.querySelector("#hint");
+
+      const FLOAT = "property: position; to: 0 0.22 0.5; dur: 2200; " +
+                    "dir: alternate; loop: true; easing: easeInOutSine; startEvents: float";
+      let floatTimer = null;
+
+      target.addEventListener("targetFound", () => {
+        hint.classList.add("hidden");
+        artwork.emit("pop");
+        shadow.emit("pop");
+        clearTimeout(floatTimer);
+        floatTimer = setTimeout(() => artwork.emit("float"), 780);
+      });
+
+      target.addEventListener("targetLost", () => {
+        hint.classList.remove("hidden");
+        clearTimeout(floatTimer);
+        artwork.removeAttribute("animation__float");
+        artwork.emit("drop");
+        shadow.emit("drop");
+        artwork.setAttribute("animation__float", FLOAT);
+      });
+    </script>
+  </body>
+</html>
