@@ -1,11 +1,14 @@
 <!DOCTYPE html>
 <!--
-  WebAR ポップアップ
+  WebAR ポップアップ — もものき（森の中）版
   ------------------------------------------------------------
   同じ階層に置くファイル：
-    index.html（元 ar-popup.html）
-    targets.mind
-    img/artwork.png
+    index.html
+    targets.mind        ← marker.png（もものきの丸い絵）から生成
+    img/artwork.png     飛び出すキャラ
+    img/tree1〜3.png    周りに生える木（forest_gen.py で生成）
+    img/bush.png        手前の茂み
+    img/leaf.png        舞い落ちる葉
 
   マーカーは marker.png を印刷して使う（画面表示でも動く）。
   HTTPSのサーバーが必要。file:// では動かない。
@@ -21,13 +24,18 @@
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
     <style>
+      /* body に背景色を付けるとカメラ映像（z-index:-2 の video）が隠れて真っ黒になる。
+         黒は html 側にだけ置く */
+      html {
+        background: #000;
+      }
       html, body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #000;
         font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
       }
+      body { background: transparent; }
       #hint {
         position: fixed;
         left: 50%;
@@ -49,10 +57,74 @@
         #hint { transition: none; }
       }
     </style>
+
+    <script>
+      // 根元を軸に、板ポリをカメラの方へ向ける（子の a-plane は rotation="90 0 0" で
+      // -Y 向きに立っている前提）。lean=1 なら真上から見ても正面を向く（飛び出す絵本風）、
+      // lean=0 ならマーカー面に垂直に立ったまま水平方向だけ向く
+      AFRAME.registerComponent("billboard", {
+        // yaw=false のときは向きを固定（-Y 向き）して、手前への傾きだけ合わせる
+        schema: { lean: { default: 1 }, yaw: { default: true } },
+        init() {
+          this.cam = new THREE.Vector3();
+          this.el.object3D.rotation.order = "ZXY";
+        },
+        tick() {
+          const camEl = this.el.sceneEl.camera && this.el.sceneEl.camera.el;
+          if (!camEl || !this.el.object3D.parent) return;
+          camEl.object3D.getWorldPosition(this.cam);
+          this.el.object3D.parent.worldToLocal(this.cam);
+          const p = this.el.object3D.position;
+          const dx = this.cam.x - p.x, dy = this.cam.y - p.y, dz = this.cam.z - p.z;
+          const r = this.el.object3D.rotation;
+          if (this.data.yaw) {
+            r.z = Math.atan2(dx, -dy);
+            r.x = -Math.atan2(dz, Math.hypot(dx, dy)) * this.data.lean;
+          } else {
+            r.z = 0;
+            r.x = -Math.atan2(dz, Math.max(-dy, 0.001)) * this.data.lean;
+          }
+        },
+      });
+
+      // 舞い落ちる葉。active の間だけ上から降ってきて、下まで来たら上に戻る
+      AFRAME.registerComponent("falling-leaf", {
+        schema: { active: { default: false } },
+        init() {
+          this.reset(true);
+          this.el.object3D.visible = false;
+        },
+        update() {
+          this.el.object3D.visible = this.data.active;
+          if (this.data.active) this.reset(true);
+        },
+        reset(anyHeight) {
+          const r = (a, b) => a + Math.random() * (b - a);
+          this.x0 = r(-0.75, 0.75);
+          this.y0 = r(-0.45, 0.8);
+          this.z = anyHeight ? r(0.2, 1.5) : 1.5;
+          this.speed = r(0.1, 0.2);
+          this.phase = r(0, Math.PI * 2);
+          this.spin = r(1, 2.5) * (Math.random() < 0.5 ? -1 : 1);
+        },
+        tick(t, dt) {
+          if (!this.data.active || !dt) return;
+          this.z -= this.speed * Math.min(dt, 50) / 1000;
+          if (this.z < 0.02) this.reset(false);
+          const o = this.el.object3D;
+          o.position.set(
+            this.x0 + Math.sin(t / 700 + this.phase) * 0.09,
+            this.y0 + Math.cos(t / 950 + this.phase) * 0.04,
+            this.z
+          );
+          o.rotation.set((t / 1000) * this.spin, t / 1300 + this.phase, (t / 900) * this.spin);
+        },
+      });
+    </script>
   </head>
 
   <body>
-    <div id="hint">マーカーにカメラを向けてください</div>
+    <div id="hint">もものきの絵にカメラを向けてください</div>
 
     <a-scene
       mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 8"
@@ -64,11 +136,19 @@
     >
       <a-assets>
         <img id="art" src="./img/artwork.png" crossorigin="anonymous" />
+        <img id="tree1" src="./img/tree1.png" crossorigin="anonymous" />
+        <img id="tree2" src="./img/tree2.png" crossorigin="anonymous" />
+        <img id="tree3" src="./img/tree3.png" crossorigin="anonymous" />
+        <img id="bush" src="./img/bush.png" crossorigin="anonymous" />
+        <img id="leaf" src="./img/leaf.png" crossorigin="anonymous" />
       </a-assets>
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
       <a-entity id="target" mindar-image-target="targetIndex: 0">
+
+        <!-- 森：木・茂み・葉は下のスクリプトで生成して #forest に入れる -->
+        <a-entity id="forest"></a-entity>
 
         <!-- 影：マーカー面に貼りつく楕円。浮遊感の担当 -->
         <a-circle
@@ -81,7 +161,7 @@
           animation__out="property: material.opacity; to: 0; dur: 200; startEvents: drop"
         ></a-circle>
 
-        <!-- 本体：印刷されたキャラと同じ大きさから浮き上がって拡大する -->
+        <!-- 本体：マーカー中央から浮き上がって拡大する -->
         <a-plane
           id="artwork"
           width="0.36"
@@ -103,6 +183,75 @@
     </a-scene>
 
     <script>
+      // ---- 森の配置 ------------------------------------------------
+      // 座標はマーカー幅を 1 とした値。x=左右, y=奥(+)/手前(-), h=高さ
+      // delay は生えてくるまでの待ち時間(ms)。奥から順に生える
+      const TREES = [
+        // 奥の列（大きめ・先に生える）
+        { img: "tree2", x: -0.95, y:  1.25, h: 1.65, delay: 0   },
+        { img: "tree1", x:  0.98, y:  1.28, h: 1.65, delay: 40  },
+        { img: "tree1", x: -1.40, y:  0.65, h: 1.35, delay: 120 },
+        { img: "tree3", x:  1.42, y:  0.62, h: 1.35, delay: 160 },
+        // 手前の列
+        { img: "tree3", x:  0.00, y:  0.95, h: 1.45, delay: 0   },
+        { img: "tree2", x: -0.48, y:  0.80, h: 1.30, delay: 80  },
+        { img: "tree1", x:  0.50, y:  0.82, h: 1.30, delay: 140 },
+        { img: "tree1", x: -0.88, y:  0.40, h: 1.15, delay: 220 },
+        { img: "tree2", x:  0.90, y:  0.38, h: 1.15, delay: 260 },
+        { img: "tree3", x: -1.00, y: -0.15, h: 0.95, delay: 340 },
+        { img: "tree1", x:  1.02, y: -0.20, h: 0.95, delay: 380 },
+      ];
+      const TREE_ASPECT = 420 / 640;   // tree*.png の 幅/高さ
+      const BUSHES = [
+        { x: -0.50, y: -0.70, w: 0.62, delay: 420 },
+        { x:  0.48, y: -0.72, w: 0.62, delay: 460 },
+        { x: -0.70, y:  0.15, w: 0.45, delay: 300 },
+        { x:  0.72, y:  0.12, w: 0.45, delay: 320 },
+      ];
+      const BUSH_ASPECT = 220 / 520;
+      const LEAF_COUNT = 18;
+
+      const forest = document.querySelector("#forest");
+
+      // 根元を原点にして、scale 0 → 1 で地面から生えてくる
+      function sprout(x, y, delay, imgId, w, h, billboard) {
+        const wrap = document.createElement("a-entity");
+        wrap.setAttribute("position", `${x} ${y} 0`);
+        wrap.setAttribute("scale", "0.001 0.001 0.001");
+        wrap.setAttribute("billboard", billboard);
+        wrap.setAttribute("animation__grow",
+          `property: scale; to: 1 1 1; dur: 650; delay: ${delay}; easing: easeOutBack; startEvents: pop`);
+        wrap.setAttribute("animation__shrink",
+          "property: scale; to: 0.001 0.001 0.001; dur: 200; startEvents: drop");
+        const plane = document.createElement("a-plane");
+        plane.setAttribute("width", w);
+        plane.setAttribute("height", h);
+        plane.setAttribute("rotation", "90 0 0");
+        plane.setAttribute("position", `0 0 ${h / 2}`);
+        // 半透明の並び順で欠けないよう、アルファは切り抜き（alphaTest）で処理する
+        plane.setAttribute("material",
+          `src: #${imgId}; shader: flat; transparent: false; alphaTest: 0.5; side: double`);
+        wrap.appendChild(plane);
+        forest.appendChild(wrap);
+        return wrap;
+      }
+
+      const growers = [];
+      TREES.forEach(t => growers.push(sprout(t.x, t.y, t.delay, t.img, t.h * TREE_ASPECT, t.h, "lean: 0.8")));
+      BUSHES.forEach(b => growers.push(sprout(b.x, b.y, b.delay, "bush", b.w, b.w * BUSH_ASPECT, "lean: 1; yaw: false")));
+
+      const leaves = [];
+      for (let i = 0; i < LEAF_COUNT; i++) {
+        const leaf = document.createElement("a-plane");
+        leaf.setAttribute("width", 0.09);
+        leaf.setAttribute("height", 0.045);
+        leaf.setAttribute("material", "src: #leaf; shader: flat; transparent: false; alphaTest: 0.5; side: double");
+        leaf.setAttribute("falling-leaf", "active: false");
+        forest.appendChild(leaf);
+        leaves.push(leaf);
+      }
+
+      // ---- マーカー検出 --------------------------------------------
       const target  = document.querySelector("#target");
       const artwork = document.querySelector("#artwork");
       const shadow  = document.querySelector("#shadow");
@@ -116,6 +265,8 @@
         hint.classList.add("hidden");
         artwork.emit("pop");
         shadow.emit("pop");
+        growers.forEach(g => g.emit("pop"));
+        leaves.forEach(l => l.setAttribute("falling-leaf", "active", true));
         clearTimeout(floatTimer);
         floatTimer = setTimeout(() => artwork.emit("float"), 780);
       });
@@ -126,6 +277,8 @@
         artwork.removeAttribute("animation__float");
         artwork.emit("drop");
         shadow.emit("drop");
+        growers.forEach(g => g.emit("drop"));
+        leaves.forEach(l => l.setAttribute("falling-leaf", "active", false));
         artwork.setAttribute("animation__float", FLOAT);
       });
     </script>
